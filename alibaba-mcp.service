@@ -1,0 +1,18 @@
+[Unit]
+Description=Alibaba Sourcing MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/alibaba-mcp
+EnvironmentFile=/opt/alibaba-mcp/.env
+ExecStart=/opt/alibaba-mcp/.venv/bin/python /opt/alibaba-mcp/alibaba_mcp_server.py --proxy-headers
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/alibaba-mcp.log
+StandardError=append:/var/log/alibaba-mcp.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
