@@ -407,15 +407,28 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
         if path in self.PUBLIC_PATHS:
             return await call_next(request)
         if path in {'/', '/status', '/auth/connect'} or path.startswith('/auth/disconnect'):
-            require_admin(request)
+            try:
+                require_admin(request)
+            except AlibabaError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)},
+                    status_code=exc.status_code,
+                    headers={"WWW-Authenticate": "Basic realm=Alibaba MCP"} if exc.status_code == 401 else None,
+                )
         if path.startswith('/mcp') or path.startswith('/sse'):
             if SETTINGS.mcp_bearer_token:
                 auth = request.headers.get('Authorization', '')
                 if not auth.startswith('Bearer '):
-                    raise AlibabaError('Missing bearer token for MCP endpoint.', status_code=401)
+                    return JSONResponse(
+                        {"ok": False, "error": "Missing bearer token for MCP endpoint."},
+                        status_code=401,
+                    )
                 token = auth.split(' ', 1)[1]
                 if not constant_time_equal(token, SETTINGS.mcp_bearer_token):
-                    raise AlibabaError('Invalid MCP bearer token.', status_code=401)
+                    return JSONResponse(
+                        {"ok": False, "error": "Invalid MCP bearer token."},
+                        status_code=401,
+                    )
         return await call_next(request)
 
 
