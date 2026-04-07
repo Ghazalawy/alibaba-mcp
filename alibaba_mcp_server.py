@@ -404,9 +404,29 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        method = request.method.upper()
         if path in self.PUBLIC_PATHS:
             return await call_next(request)
-        if path in {'/', '/status', '/auth/connect'} or path.startswith('/auth/disconnect'):
+        # MCP handler is mounted at "/" — check bearer token for POST/DELETE/GET
+        if path == '/' or path.startswith('/mcp') or path.startswith('/sse'):
+            if SETTINGS.mcp_bearer_token:
+                auth = request.headers.get('Authorization', '')
+                if auth.startswith('Bearer '):
+                    token = auth.split(' ', 1)[1]
+                    if not constant_time_equal(token, SETTINGS.mcp_bearer_token):
+                        return JSONResponse(
+                            {"ok": False, "error": "Invalid MCP bearer token."},
+                            status_code=401,
+                        )
+                    return await call_next(request)
+                # No bearer token — only block POST/DELETE (GET without auth falls through to next check)
+                if method in {'POST', 'DELETE'}:
+                    return JSONResponse(
+                        {"ok": False, "error": "Missing bearer token for MCP endpoint."},
+                        status_code=401,
+                    )
+        # Admin pages require Basic Auth (GET on /status, etc.)
+        if path in {'/status', '/auth/connect'} or path.startswith('/auth/disconnect'):
             try:
                 require_admin(request)
             except AlibabaError as exc:
@@ -415,20 +435,6 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
                     status_code=exc.status_code,
                     headers={"WWW-Authenticate": "Basic realm=Alibaba MCP"} if exc.status_code == 401 else None,
                 )
-        if path.startswith('/mcp') or path.startswith('/sse'):
-            if SETTINGS.mcp_bearer_token:
-                auth = request.headers.get('Authorization', '')
-                if not auth.startswith('Bearer '):
-                    return JSONResponse(
-                        {"ok": False, "error": "Missing bearer token for MCP endpoint."},
-                        status_code=401,
-                    )
-                token = auth.split(' ', 1)[1]
-                if not constant_time_equal(token, SETTINGS.mcp_bearer_token):
-                    return JSONResponse(
-                        {"ok": False, "error": "Invalid MCP bearer token."},
-                        status_code=401,
-                    )
         return await call_next(request)
 
 
@@ -1905,7 +1911,6 @@ middleware = [
 
 
 custom_routes = [
-    Route("/", endpoint=status_page, methods=["GET"]),
     Route("/status", endpoint=status_page, methods=["GET"]),
     Route("/healthz", endpoint=healthz, methods=["GET"]),
     Route("/readyz", endpoint=readyz, methods=["GET"]),
@@ -1919,6 +1924,9 @@ custom_routes = [
 ]
 
 mcp._custom_starlette_routes = custom_routes
+
+# Override the default streamable_http_path to "/" so Claude.ai can POST directly
+mcp.settings.streamable_http_path = "/"
 app = mcp.streamable_http_app()
 
 for mw in reversed(middleware):
